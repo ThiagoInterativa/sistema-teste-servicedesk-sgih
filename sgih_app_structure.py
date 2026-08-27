@@ -10,9 +10,10 @@ import streamlit as st
 # Configuração da página (deve ser a primeira chamada Streamlit)
 st.set_page_config(
     page_title="SGIH - Sistema de Gestão Inteligente de Helpdesk",
-    page_layout="wide",
+    layout="wide",
     initial_sidebar_state="expanded"
 )
+
 
 # ==========================================
 # 1. ESTADO DA SESSÃO PARA NAVEGAÇÃO E MÓDULOS
