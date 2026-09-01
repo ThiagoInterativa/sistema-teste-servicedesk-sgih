@@ -179,7 +179,7 @@ elif pagina == "Relatórios":
     
 elif pagina == "Util":
     st.title("📑 Links Uteis")
-    st.write("Geração de relatórios gerenciais sob demanda.")
+    st.write("Links uteis para gerenciamento e Monitoramento de Tarefas.")
 
 
 
