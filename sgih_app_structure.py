@@ -55,6 +55,9 @@ with st.sidebar:
     if st.button("📈 Relatórios", use_container_width=True):
         mudar_pagina("Relatórios")
 
+    if st.button("📑 Link Util", use_container_width=True):
+        mudar_pagina("Util")
+
     st.markdown("---")
     st.markdown("### Configurações")
     refresh_rate = st.slider("Atualização (segundos)", 10, 300, 30, 5)
@@ -173,3 +176,10 @@ elif pagina == "Técnicos":
 elif pagina == "Relatórios":
     st.title("📈 Relatórios Consolidados")
     st.write("Geração de relatórios gerenciais sob demanda.")
+    
+elif pagina == "Util":
+    st.title("📑 Links Uteis")
+    st.write("Geração de relatórios gerenciais sob demanda.")
+
+
+
