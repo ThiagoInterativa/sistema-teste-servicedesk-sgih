@@ -41,9 +41,7 @@ with st.sidebar:
             <p style="color: #94a3b8; font-size: 12px; margin: 4px 0 0 0;">Sistema de Gestão Inteligente de ServiceDesk</p>
         </div>
     """, unsafe_allow_html=True)
-
-    st.markdown("### Navegação")
-    
+   
     # Botões do menu lateral
     if st.button("📊 Visão Geral", use_container_width=True):
         mudar_pagina("Visão Geral")
