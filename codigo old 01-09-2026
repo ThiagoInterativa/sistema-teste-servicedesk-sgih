@@ -41,9 +41,7 @@ with st.sidebar:
             <p style="color: #94a3b8; font-size: 12px; margin: 4px 0 0 0;">Sistema de Gestão Inteligente de ServiceDesk</p>
         </div>
     """, unsafe_allow_html=True)
-
-    st.markdown("### Navegação")
-    
+   
     # Botões do menu lateral
     if st.button("📊 Visão Geral", use_container_width=True):
         mudar_pagina("Visão Geral")
@@ -56,6 +54,9 @@ with st.sidebar:
         
     if st.button("📈 Relatórios", use_container_width=True):
         mudar_pagina("Relatórios")
+
+    if st.button("📑 Link Util", use_container_width=True):
+        mudar_pagina("Util")
 
     st.markdown("---")
     st.markdown("### Configurações")
@@ -175,3 +176,7 @@ elif pagina == "Técnicos":
 elif pagina == "Relatórios":
     st.title("📈 Relatórios Consolidados")
     st.write("Geração de relatórios gerenciais sob demanda.")
+    
+elif pagina == "Util":
+    st.title("📑 Links Uteis")
+    st.write("Links uteis para gerenciamento e Monitoramento de Tarefas.")
