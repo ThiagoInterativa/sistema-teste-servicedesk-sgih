@@ -38,7 +38,7 @@ with st.sidebar:
     st.markdown("""
         <div style="padding: 10px 0 20px 0; border-bottom: 1px solid #334155; margin-bottom: 20px;">
             <h2 style="color: #ffffff; margin: 0; font-size: 24px;">⚡ SGIH</h2>
-            <p style="color: #94a3b8; font-size: 12px; margin: 4px 0 0 0;">Sistema de Gestão Inteligente de Helpdesk</p>
+            <p style="color: #94a3b8; font-size: 12px; margin: 4px 0 0 0;">Sistema de Gestão Inteligente de ServiceDesk</p>
         </div>
     """, unsafe_allow_html=True)
 
