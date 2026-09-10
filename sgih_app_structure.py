@@ -14,6 +14,56 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
+# ==========================================
+# ESTILO DOS BOTÕES - COLOQUE LOGO ABAIXO DO st.set_page_config
+# ==========================================
+st.markdown("""
+    <style>
+    /* Botões do menu lateral */
+    div.stButton > button:first-child {
+        width: 100%;
+        border-radius: 10px;       /* Cantos arredondados */
+        border: none;              /* Sem borda */
+        padding: 10px 14px;       /* Espaçamento interno */
+        margin: 4px 0;             /* Espaço entre botões */
+        text-align: left;          /* Alinha ícone + texto à esquerda */
+        font-size: 14px;
+        font-weight: 500;
+        background-color: #1e293b; /* Fundo escuro */
+        color: #e2e8f0;            /* Cor do texto */
+        transition: all 0.2s ease; /* Efeito suave */
+    }
+
+    /* Efeito ao passar o mouse */
+    div.stButton > button:first-child:hover {
+        background-color: #334155;
+        color: #ffffff;
+        transform: translateX(3px); /* Desloca levemente à direita */
+    }
+
+    /* ✅ DESTAQUE DA PÁGINA ATIVA */
+    .botao-ativo > button:first-child {
+        background-color: #10b981 !important; /* Verde destaque */
+        color: #ffffff !important;
+        font-weight: 600;
+        border-left: 4px solid #059669;
+    }
+
+    /* Botões de destaque (verde principal) */
+    .stButton > button[kind="primary"] {
+        background-color: #10b981;
+        border-radius: 10px;
+        border: none;
+    }
+
+    /* Botões secundários */
+    .stButton > button[kind="secondary"] {
+        background-color: #334155;
+        border-radius: 10px;
+        border: none;
+    }
+    </style>
+""", unsafe_allow_html=True)
 
 # ==========================================
 # 1. ESTADO DA SESSÃO PARA NAVEGAÇÃO E MÓDULOS
