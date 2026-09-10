@@ -1,111 +1,71 @@
-# ==========================================
-# ESTRUTURA MODULAR - SGIH COM MENU ESTILO PAINEL
-# ==========================================
+"""
+Estrutura Modular e Unificada - SGIH (Sistema de Gestão Inteligente de Helpdesk)
+Este arquivo demonstra como estruturar o aplicativo Streamlit em um sistema único,
+utilizando controle de estado para navegação no menu lateral e carregamento sob demanda (lazy loading)
+dos módulos pesados (como Análise de Chamadas, Chamadas Recusadas e Ligações por Ramal).
+"""
+
 import streamlit as st
 
-# Configuração da página (DEVE ser a primeira chamada)
+# Configuração da página (deve ser a primeira chamada Streamlit)
 st.set_page_config(
     page_title="SGIH - Sistema de Gestão Inteligente de ServiceDesk",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
+
 # ==========================================
-# 1. ESTADO DA SESSÃO
+# 1. ESTADO DA SESSÃO PARA NAVEGAÇÃO E MÓDULOS
 # ==========================================
 if "pagina_atual" not in st.session_state:
     st.session_state["pagina_atual"] = "Visão Geral"
+
 if "modulo_ativo" not in st.session_state:
     st.session_state["modulo_ativo"] = None
 
 def mudar_pagina(nome_pagina):
     st.session_state["pagina_atual"] = nome_pagina
-    st.session_state["modulo_ativo"] = None
+    st.session_state["modulo_ativo"] = None # Reseta o módulo interno ao trocar de menu
 
 def abrir_modulo(nome_modulo):
     st.session_state["modulo_ativo"] = nome_modulo
 
 # ==========================================
-# 2. MENU LATERAL ESTILO PAINEL (IGUAL A FOTO)
+# 2. MENU LATERAL PERSONALIZADO (SGIH)
 # ==========================================
 with st.sidebar:
-    # ===== TÍTULO DO SISTEMA - CAIXA SUPERIOR =====
     st.markdown("""
-        <div style="
-            background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
-            padding: 18px;
-            border-radius: 12px;
-            margin-bottom: 20px;
-            border: 1px solid #334155;
-        ">
-            <h2 style="color: #ffffff; margin: 0; font-size: 22px;">⚡ SGIH</h2>
-            <p style="color: #94a3b8; font-size: 12px; margin: 6px 0 0 0;">Sistema de Gestão Inteligente de Helpdesk</p>
+        <div style="padding: 10px 0 20px 0; border-bottom: 1px solid #334155; margin-bottom: 20px;">
+            <h2 style="color: #ffffff; margin: 0; font-size: 24px;">⚡ SGIH</h2>
+            <p style="color: #94a3b8; font-size: 12px; margin: 4px 0 0 0;">Sistema de Gestão Inteligente de ServiceDesk</p>
         </div>
     """, unsafe_allow_html=True)
-
-    # ===== BLOCO DE NAVEGAÇÃO =====
-    st.markdown("""
-        <div style="
-            background: #1e293b;
-            padding: 16px;
-            border-radius: 12px;
-            margin-bottom: 16px;
-            border: 1px solid #334155;
-        ">
-            <p style="color: #cbd5e1; font-size: 13px; margin: 0 0 12px 0; font-weight: 500;">📂 Navegação</p>
-    """, unsafe_allow_html=True)
-
-    # Botões com estilo visual unificado
+   
+    # Botões do menu lateral
     if st.button("📊 Visão Geral", use_container_width=True):
         mudar_pagina("Visão Geral")
+    
     if st.button("📞 Chamadas", use_container_width=True):
         mudar_pagina("Chamadas")
+        
     if st.button("👥 Técnicos", use_container_width=True):
         mudar_pagina("Técnicos")
+        
     if st.button("📈 Relatórios", use_container_width=True):
         mudar_pagina("Relatórios")
-    if st.button("📑 Links Úteis", use_container_width=True):
+
+    if st.button("📑 Link Util", use_container_width=True):
         mudar_pagina("Util")
 
-    st.markdown("</div>", unsafe_allow_html=True)  # Fecha bloco Navegação
-
-    # ===== BLOCO DE CONFIGURAÇÕES (com slider estilo Steps da foto) =====
-    st.markdown("""
-        <div style="
-            background: #1e293b;
-            padding: 16px;
-            border-radius: 12px;
-            border: 1px solid #334155;
-        ">
-            <p style="color: #cbd5e1; font-size: 13px; margin: 0 0 10px 0; font-weight: 500;">⚙️ Configurações</p>
-        </div>
-    """, unsafe_allow_html=True)
-
-    # Slider estilo "Steps" da imagem
-    refresh_rate = st.slider(
-        "⏱️ Taxa de Atualização (segundos)",
-        min_value=10,
-        max_value=300,
-        value=30,
-        step=5
-    )
-
-    st.markdown("</div>", unsafe_allow_html=True)  # Fecha bloco Configurações
-
-    # ===== RODAPÉ =====
-    st.markdown("""
-        <div style="
-            margin-top: 16px;
-            padding: 12px;
-            text-align: center;
-        ">
-            <p style="color: #64748b; font-size: 11px; margin: 0;">v2.1.0 • Online ✅</p>
-        </div>
-    """, unsafe_allow_html=True)
+    st.markdown("---")
+    st.markdown("### Configurações")
+    refresh_rate = st.slider("Atualização (segundos)", 10, 300, 30, 5)
 
 # ==========================================
-# 3. ROTEAMENTO DE PÁGINAS (mantive o seu funcionamento)
+# 3. ROTEAMENTO DE PÁGINAS E LAZY LOADING
 # ==========================================
+
 pagina = st.session_state["pagina_atual"]
 modulo = st.session_state["modulo_ativo"]
 
@@ -113,7 +73,9 @@ if pagina == "Visão Geral":
     st.title("📊 Visão Geral do Sistema")
     st.write("Acompanhamento em tempo real dos serviços essenciais (PABX, Kanban e WhatsApp).")
     
+    # Carregamento leve inicial (Apenas status rápido)
     col1, col2, col3 = st.columns(3)
+    
     with col1:
         st.metric(label="PABX (Agentes Livres)", value="23 Livres", delta="17 Ocupados")
     with col2:
@@ -124,6 +86,7 @@ if pagina == "Visão Geral":
     st.markdown("---")
     st.subheader("Atalhos Rápidos de Módulos")
     
+    # Cards interativos na visão geral que direcionam para os módulos
     c1, c2, c3 = st.columns(3)
     with c1:
         if st.button("🔴 Chamadas Recusadas", use_container_width=True):
@@ -144,8 +107,10 @@ if pagina == "Visão Geral":
 elif pagina == "Chamadas":
     st.title("📞 Módulo de Chamadas")
     
+    # Se nenhum módulo interno estiver selecionado, exibe os cards de escolha
     if modulo is None:
         st.write("Selecione abaixo o subsistema de chamadas que deseja carregar:")
+        
         col1, col2, col3 = st.columns(3)
         
         with col1:
@@ -180,18 +145,26 @@ elif pagina == "Chamadas":
             if st.button("Abrir Módulo Ramal", use_container_width=True):
                 abrir_modulo("Ramal")
                 st.rerun()
+                
     else:
+        # Botão para voltar à seleção de cards do módulo
         if st.button("← Voltar para os Cards de Chamadas"):
             st.session_state["modulo_ativo"] = None
             st.rerun()
+            
         st.markdown("---")
         
+        # LAZY LOADING: O código pesado de cada módulo só executa aqui quando aberto!
         if modulo == "Recusadas":
             st.subheader("🔴 Módulo: Chamadas Recusadas / Abandonadas")
             st.info("Aqui entram as tabelas e requisições específicas de chamadas perdidas...")
+            # Exemplo de tabela leve ou carregamento de dados sob demanda
+            
         elif modulo == "Analise":
             st.subheader("📊 Módulo: Análise e Acompanhamento de Chamadas (CDR)")
             st.info("Aqui entra o código de login no PABX, pesquisa de data e gráficos pesados de CDR...")
+            # Chamada da função buscar_cdr() apenas neste momento!
+            
         elif modulo == "Ramal":
             st.subheader("📞 Módulo: Ligações por Ramal")
             st.info("Aqui entram os filtros e relatórios segregados por ramal...")
@@ -203,7 +176,7 @@ elif pagina == "Técnicos":
 elif pagina == "Relatórios":
     st.title("📈 Relatórios Consolidados")
     st.write("Geração de relatórios gerenciais sob demanda.")
-
+    
 elif pagina == "Util":
-    st.title("📑 Links Úteis")
-    st.write("Links úteis para gerenciamento e Monitoramento de Tarefas.")
+    st.title("📑 Links Uteis")
+    st.write("Links uteis para gerenciamento e Monitoramento de Tarefas.")
