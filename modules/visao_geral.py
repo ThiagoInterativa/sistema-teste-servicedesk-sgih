@@ -9,6 +9,7 @@ Kanban e WhatsApp agora usam consulta real.
 NOVIDADES NESTA VERSÃO:
 - Botão "Finalizar" em cada tarefa do Kanban
 - Botão "Editar" que permite alterar e salvar o nome da tarefa
+- Botões compactos (só ícone) para não quebrar linha
 """
 
 import json
@@ -178,11 +179,9 @@ def login():
     session = requests.Session()
 
     try:
-        # Credenciais configuradas no Streamlit.
         email = st.secrets["EMAIL"]
         senha = st.secrets["SENHA"]
 
-        # Identifica o cliente HTTP.
         session.headers.update({
             "User-Agent": (
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -191,18 +190,11 @@ def login():
             )
         })
 
-        # Abre a página de login para obter o CSRF.
-        resposta = session.get(
-            LOGIN_URL,
-            timeout=REQUEST_TIMEOUT,
-        )
+        resposta = session.get(LOGIN_URL, timeout=REQUEST_TIMEOUT)
         resposta.raise_for_status()
 
         soup = BeautifulSoup(resposta.text, "html.parser")
-        campo_token = soup.find(
-            "input",
-            {"name": "_token"},
-        )
+        campo_token = soup.find("input", {"name": "_token"})
 
         if campo_token is None or not campo_token.get("value"):
             session.close()
@@ -213,7 +205,6 @@ def login():
 
         token = campo_token["value"]
 
-        # Dados enviados ao formulário de autenticação.
         payload = {
             "login": email,
             "senha": senha,
@@ -228,17 +219,9 @@ def login():
         )
         resposta_login.raise_for_status()
 
-        # Verificação básica para detectar se continuamos
-        # na página de login depois do envio do formulário.
         url_final = resposta_login.url.rstrip("/")
-        pagina_final = BeautifulSoup(
-            resposta_login.text,
-            "html.parser",
-        )
-        campo_login = pagina_final.find(
-            "input",
-            {"name": "_token"},
-        )
+        pagina_final = BeautifulSoup(resposta_login.text, "html.parser")
+        campo_login = pagina_final.find("input", {"name": "_token"})
 
         ainda_no_login = (
             url_final == LOGIN_URL.rstrip("/")
@@ -277,17 +260,10 @@ def login():
 def get_agentes(session):
     """
     Consulta a página de monitoramento dos técnicos.
-    A lógica fornecida utiliza:
-        Coluna 0: nome do técnico.
-        Coluna 2: status do técnico.
-
-    Retorna uma lista de tuplas:
-        [("Leonardo", "livre"), ("Matheus", "pausa")]
+    Coluna 0: nome do técnico.
+    Coluna 2: status do técnico.
     """
-    resposta = session.get(
-        MONITOR_URL,
-        timeout=REQUEST_TIMEOUT,
-    )
+    resposta = session.get(MONITOR_URL, timeout=REQUEST_TIMEOUT)
     resposta.raise_for_status()
 
     soup = BeautifulSoup(resposta.text, "html.parser")
@@ -304,25 +280,17 @@ def get_agentes(session):
     for linha in tabela.find_all("tr"):
         colunas = linha.find_all("td")
 
-        # Ignora cabeçalhos e linhas incompletas.
         if len(colunas) < 3:
             continue
 
-        # Extrai o nome.
         nome = colunas[0].get_text(" ", strip=True)
-
-        # Remove o texto auxiliar que pode aparecer no nome.
         nome = re.split(
             r"Última chamada",
             nome,
             flags=re.IGNORECASE,
         )[0].strip()
 
-        # Extrai o texto da terceira coluna.
-        texto_status = colunas[2].get_text(
-            " ",
-            strip=True,
-        )
+        texto_status = colunas[2].get_text(" ", strip=True)
 
         if not nome:
             continue
@@ -338,11 +306,7 @@ def get_agentes(session):
 # ============================================================
 @st.cache_data(ttl=CACHE_TTL, show_spinner=False)
 def _status_pabx_cache(ttl_marker):
-    """
-    Armazena temporariamente os dados do PABX.
-    ttl_marker integra a chave do cache, permitindo renovar
-    a consulta quando o intervalo de atualização muda.
-    """
+    """Armazena temporariamente os dados do PABX."""
     _ = ttl_marker
 
     session, erro = login()
@@ -479,26 +443,22 @@ def atualizar_kanban(session_kb):
 
 
 # ============================================================
-# FUNÇÕES DE AÇÃO NAS TAREFAS (NOVAS)
+# FUNÇÕES DE AÇÃO NAS TAREFAS
 # ============================================================
 def finalizar_tarefa(task_id: str):
-    """
-    Remove a tarefa da lista de pendentes e salva no arquivo.
-    Equivale a "encerrar" a tarefa manualmente.
-    """
+    """Remove a tarefa da lista de pendentes e salva no arquivo."""
     if task_id in st.session_state.tarefas_kanban:
         del st.session_state.tarefas_kanban[task_id]
         salvar_tarefas(st.session_state.tarefas_kanban)
-        # Limpa estado de edição caso estivesse editando esta tarefa
+
         if st.session_state.get("editando_tarefa") == task_id:
             st.session_state.editando_tarefa = None
+
         st.rerun()
 
 
 def salvar_edicao_tarefa(task_id: str, novo_titulo: str):
-    """
-    Salva o novo nome da tarefa e sai do modo de edição.
-    """
+    """Salva o novo nome da tarefa e sai do modo de edição."""
     novo_titulo = (novo_titulo or "").strip()
     if not novo_titulo:
         st.warning("O título da tarefa não pode ficar vazio.")
@@ -597,6 +557,20 @@ def render(refresh_rate=30):
     """
     refresh_rate = max(5, min(300, int(refresh_rate)))
 
+    # ---------- CSS para botões compactos ----------
+    st.markdown("""
+    <style>
+        /* Deixa os botões do Kanban bem pequenos */
+        div[data-testid="stHorizontalBlock"] button {
+            padding: 0.15rem 0.35rem !important;
+            font-size: 0.9rem !important;
+            min-height: 1.7rem !important;
+            height: 1.7rem !important;
+            line-height: 1.2 !important;
+        }
+    </style>
+    """, unsafe_allow_html=True)
+
     # Inicialização de estados
     if "tarefas_kanban" not in st.session_state:
         st.session_state.tarefas_kanban = carregar_tarefas_salvas()
@@ -607,37 +581,31 @@ def render(refresh_rate=30):
     if "session_kanban" not in st.session_state:
         st.session_state.session_kanban = None
 
-    # Novo estado: qual tarefa está sendo editada no momento
     if "editando_tarefa" not in st.session_state:
         st.session_state.editando_tarefa = None
 
     @st.fragment(run_every=refresh_rate)
     def painel_monitoramento():
-        # Cabeçalho original do SGIH.
+        # Cabeçalho
         st.title("Visão Geral")
-        st.caption(
-            "Monitoramento do ambiente e ferramentas - Service Desk"
-        )
+        st.caption("Monitoramento do ambiente e ferramentas - Service Desk")
 
-        # Muda a chave de consulta a cada intervalo.
+        # Cache do PABX
         ttl_marker = int(time.time() // refresh_rate)
         resultado_pabx = _status_pabx_cache(ttl_marker)
 
-        # ---------- KANBAN (real) ----------
+        # ---------- KANBAN ----------
         if st.session_state.session_kanban is None:
             st.session_state.session_kanban = login_kanban()
 
         atualizar_kanban(st.session_state.session_kanban)
         tarefas_kanban = st.session_state.tarefas_kanban
 
-        # ---------- WHATSFLUX (real) ----------
+        # ---------- WHATSFLUX ----------
         status_whats, whatsapp = login_e_get_status_whatsflux()
 
-        # Layout de três colunas.
-        col1, col2, col3 = st.columns(
-            [1.1, 1.9, 0.7],
-            gap="medium",
-        )
+        # Layout de três colunas
+        col1, col2, col3 = st.columns([1.1, 1.9, 0.7], gap="medium")
 
         # ----------------------------------------------------
         # COLUNA 1 — PABX
@@ -665,8 +633,6 @@ def render(refresh_rate=30):
                         f"""
                         <div style="
                             white-space: nowrap;
-                            width: 50px;
-                            max-width: 50px;
                             font-size: 12px;
                             padding: 6px 0;
                             line-height: 1.5;
@@ -698,7 +664,7 @@ def render(refresh_rate=30):
                         st.write(f"{cor} {nome} — {status}")
 
         # ----------------------------------------------------
-        # COLUNA 2 — KANBAN (com botões Finalizar e Editar)
+        # COLUNA 2 — KANBAN (botões compactos)
         # ----------------------------------------------------
         with col2:
             st.subheader("🗂️ Tarefas Kanban")
@@ -707,9 +673,9 @@ def render(refresh_rate=30):
                 st.info("Nenhuma tarefa pendente.")
             else:
                 for task_id, tarefa in list(tarefas_kanban.items()):
+
                     # --- MODO DE EDIÇÃO ---
                     if st.session_state.editando_tarefa == task_id:
-                        # Campo de texto para editar o título
                         novo_titulo = st.text_input(
                             "Editar título da tarefa",
                             value=tarefa.get("titulo", ""),
@@ -717,7 +683,6 @@ def render(refresh_rate=30):
                             label_visibility="collapsed",
                         )
 
-                        # Botões de Salvar e Cancelar lado a lado
                         col_salvar, col_cancelar = st.columns(2)
                         with col_salvar:
                             if st.button(
@@ -738,25 +703,24 @@ def render(refresh_rate=30):
                                 st.rerun()
 
                     # --- MODO NORMAL (visualização) ---
-                    
                     else:
-    # Layout mais compacto: título ocupa quase tudo, botões ficam bem pequenos à direita
+                        # Título ocupa quase tudo, botões ficam bem pequenos à direita
                         col_titulo, col_botoes = st.columns([5.5, 1.5], gap="small")
 
                         with col_titulo:
-                                st.markdown(
-                                    f"**• {tarefa['titulo']}**  \n"
-                                    f"<small style='color:gray'>"
-                                    f"{tarefa.get('status', 'Pendente')} • "
-                                    f"{tarefa.get('data_criacao', '')}"
-                                    f"</small>",
-                                    unsafe_allow_html=True,
-                                )
+                            st.markdown(
+                                f"**• {tarefa['titulo']}**  \n"
+                                f"<small style='color:gray'>"
+                                f"{tarefa.get('status', 'Pendente')} • "
+                                f"{tarefa.get('data_criacao', '')}"
+                                f"</small>",
+                                unsafe_allow_html=True,
+                            )
 
                         with col_botoes:
-                            # Dois botões lado a lado (não um embaixo do outro)
+                            # Dois botões lado a lado (só ícone)
                             b1, b2 = st.columns(2, gap="small")
-                    
+
                             with b1:
                                 if st.button(
                                     "✏️",
@@ -766,7 +730,7 @@ def render(refresh_rate=30):
                                 ):
                                     st.session_state.editando_tarefa = task_id
                                     st.rerun()
-                    
+
                             with b2:
                                 if st.button(
                                     "✅",
@@ -776,24 +740,25 @@ def render(refresh_rate=30):
                                     type="primary",
                                 ):
                                     finalizar_tarefa(task_id)
-                    
+
                         # Linha separadora bem fina
                         st.markdown(
                             "<hr style='margin: 4px 0; border: none; border-top: 1px solid #eee;'>",
                             unsafe_allow_html=True,
                         )
-                            # ----------------------------------------------------
-                            # COLUNA 3 — WHATSAPP (WhatsFlux)
-                            # ----------------------------------------------------
-                            with col3:
-                                st.subheader("💬 WhatsApp")
-                    
-                                if status_whats != "OK":
-                                    st.warning(status_whats)
-                                else:
-                                    for nome, status in whatsapp.items():
-                                        cor = "🟢" if status == "online" else "⚪"
-                                        st.write(f"{cor} {nome} — {status}")
 
-    # Executa o painel com atualização automática.
+        # ----------------------------------------------------
+        # COLUNA 3 — WHATSAPP (WhatsFlux)
+        # ----------------------------------------------------
+        with col3:
+            st.subheader("💬 WhatsApp")
+
+            if status_whats != "OK":
+                st.warning(status_whats)
+            else:
+                for nome, status in whatsapp.items():
+                    cor = "🟢" if status == "online" else "⚪"
+                    st.write(f"{cor} {nome} — {status}")
+
+    # Executa o painel com atualização automática
     painel_monitoramento()
