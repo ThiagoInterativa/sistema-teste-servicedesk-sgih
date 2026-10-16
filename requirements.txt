@@ -1,0 +1,4 @@
+streamlit
+streamlit-autorefresh==1.0.1
+requests
+beautifulsoup4
