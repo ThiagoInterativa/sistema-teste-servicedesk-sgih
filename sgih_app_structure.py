@@ -1,794 +1,376 @@
 """
-Módulo: Visão Geral do SGIH
-===========================
-Monitoramento do PABX, Kanban e WhatsApp.
-O PABX utiliza autenticação HTTP com CSRF e consulta
-a tabela real de agentes.
-Kanban e WhatsApp agora usam consulta real.
-
-NOVIDADES NESTA VERSÃO:
-- Botão "Finalizar" em cada tarefa do Kanban
-- Botão "Editar" que permite alterar e salvar o nome da tarefa
+SGIH - Sistema de Gestão Inteligente de Helpdesk
+=================================================
+VARIANTE 2: consulta em SEGUNDO PLANO (background thread).
+O usuário clica em "Análise de Chamadas", a busca do CDR começa
+numa thread separada, e o usuário PODE voltar para "Visão Geral"
+ou qualquer outro menu enquanto ela roda.
+Um badge na sidebar mostra o progresso em tempo real.
 """
-
-import json
-import os
-import re
-import time
-import unicodedata
-import requests
 import streamlit as st
-from bs4 import BeautifulSoup
+from streamlit_autorefresh import st_autorefresh
+from modules.visao_geral import renderizar_botao_audio
 
-# ============================================================
-# CONFIGURAÇÕES DO PABX
-# ============================================================
-LOGIN_URL = "https://pabx.evence.com.br/login"
-MONITOR_URL = (
-    "https://pabx.evence.com.br/"
-    "callcenter/monitoramentoAgentes/detalhes"
-    "?agentes=46,47,49,50,52,53"
+# ==========================================================
+# CONFIGURAÇÃO DA PÁGINA
+# ==========================================================
+st.set_page_config(
+    layout="wide",
+    page_title="SGIH",
+    page_icon="🖥️"
 )
-REQUEST_TIMEOUT = 15
-CACHE_TTL = 30
 
-# ============================================================
-# CONFIGURAÇÕES DO KANBAN
-# ============================================================
-KANBAN_LOGIN_URL = "https://kanban.interativanet.com.br/?controller=AuthController&action=check"
-KANBAN_URL = (
-    "https://kanban.interativanet.com.br/"
-    "?controller=ProjectOverviewController&action=show"
-    "&project_id=1&search=status%3Aopen"
+# ==========================================================
+# CSS
+# ==========================================================
+st.markdown("""
+<style>
+section[data-testid="stSidebar"] {
+    background-color: #111827;
+    border-right: 1px solid #232b3d;
+}
+.sgih-title {
+    color: #ffffff;
+    font-size: 16px;
+    font-weight: 600;
+    margin-bottom: 0px;
+}
+.sgih-subtitle {
+    color: #7d879c;
+    font-size: 11px;
+    line-height: 1.3;
+    margin-bottom: 14px;
+}
+.badge-job {
+    background: #0c2a4a;
+    border: 1px solid #1d4ed8;
+    border-radius: 8px;
+    padding: 8px 10px;
+    margin-bottom: 10px;
+    color: #85b7eb;
+    font-size: 12px;
+}
+div[data-testid="stSidebar"] button {
+    text-align: left;
+    background-color: transparent;
+    border: none;
+    color: #9fb0cc;
+}
+div[data-testid="stSidebar"] button:hover {
+    background-color: #1a2233;
+    color: #ffffff;
+}
+</style>
+""", unsafe_allow_html=True)
+
+# ==========================================================
+# ESTADO DA SESSÃO
+# ==========================================================
+if "menu" not in st.session_state:
+    st.session_state.menu = "visao_geral"
+if "card" not in st.session_state:
+    st.session_state.card = None
+if "sidebar_expandida" not in st.session_state:
+    st.session_state.sidebar_expandida = True
+if "refresh_rate" not in st.session_state:
+    st.session_state.refresh_rate = 30
+# Dicionário de jobs em segundo plano
+if "jobs" not in st.session_state:
+    st.session_state.jobs = {}
+
+# ==========================================================
+# FUNÇÃO PARA TROCAR DE MENU
+# ==========================================================
+def ir_para(menu, card=None):
+    st.session_state.menu = menu
+    st.session_state.card = card
+    st.rerun()
+
+# ==========================================================
+# AUTOREFRESH
+# ==========================================================
+algum_job_rodando = any(
+    j.get("status") == "running"
+    for j in st.session_state.jobs.values()
 )
-TAREFAS_FILE = "tarefas_pendentes.json"
-
-# ============================================================
-# FUNÇÕES AUXILIARES
-# ============================================================
-def remover_acentos(texto):
-    """Remove acentos e converte o texto para minúsculas."""
-    texto = str(texto or "")
-    return (
-        unicodedata.normalize("NFKD", texto)
-        .encode("ascii", "ignore")
-        .decode("ascii")
-        .lower()
-        .strip()
+if algum_job_rodando:
+    st_autorefresh(
+        interval=2000,
+        key="autorefresh_jobs"
     )
 
-
-def normalizar_status(texto):
-    """
-    Converte o status recebido do PABX para:
-    livre, ocupado, pausa ou offline.
-    """
-    texto = remover_acentos(texto)
-
-    if any(p in texto for p in (
-        "indisponivel",
-        "offline",
-        "desconectado",
-        "deslogado",
-    )):
-        return "offline"
-
-    if "pausa" in texto:
-        return "pausa"
-
-    if any(p in texto for p in (
-        "ocupado",
-        "falando",
-        "em ligacao",
-        "em chamada",
-        "atendimento",
-    )):
-        return "ocupado"
-
-    if "livre" in texto or "disponivel" in texto:
-        return "livre"
-
-    # Não presumir que um status desconhecido seja livre.
-    return "offline"
-
-
-# ============================================================
-# SISTEMA DE ÁUDIO
-# ============================================================
-def renderizar_botao_audio():
-    audio_url = "https://notificationsounds.com/storage/sounds/file-sounds-1150-pristine.mp3"
-    tocar_agora = "true" if st.session_state.get("play_alert", False) else "false"
-
-    sound_html = f"""
-    <div style="display: flex; justify-content: flex-end; align-items: center; height: 40px;">
-        <button id="btn-ativar-som" onclick="testarEAtivarSom()" style="
-            background:#2563eb;
-            color:white;
-            border:none;
-            border-radius:8px;
-            height:40px;
-            font-weight:600;
-            padding:0 18px;
-            cursor:pointer;
-        ">🔊 Ativar & Testar Som</button>
-    </div>
-
-    <audio id="notif-sound" src="{audio_url}" preload="auto"></audio>
-
-    <script>
-        var audio = document.getElementById('notif-sound');
-        var deveTocarAutomatico = {tocar_agora};
-
-        function testarEAtivarSom() {{
-            if (audio) {{
-                audio.volume = 1.0;
-                audio.play()
-                    .then(function() {{
-                        alert("✅ Excelente! Som do painel ativado e autorizado com sucesso.");
-                    }})
-                    .catch(function(err) {{
-                        alert("❌ Erro ao ativar o som. Verifique se o volume do computador está ligado.");
-                    }});
-            }}
-        }}
-
-        if (deveTocarAutomatico && audio) {{
-            audio.volume = 1.0;
-            audio.play().catch(function(e) {{
-                console.log("Autoplay bloqueado pelo navegador.");
-            }});
-        }}
-    </script>
-    """
-    st.components.v1.html(sound_html, height=50)
-
-    # Reseta o flag após tentar tocar
-    if st.session_state.get("play_alert", False):
-        st.session_state.play_alert = False
-
-
-# ============================================================
-# PERSISTÊNCIA DAS TAREFAS DO KANBAN
-# ============================================================
-def carregar_tarefas_salvas():
-    if os.path.exists(TAREFAS_FILE):
-        try:
-            with open(TAREFAS_FILE, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except Exception:
-            return {}
-    return {}
-
-
-def salvar_tarefas(tarefas):
-    with open(TAREFAS_FILE, "w", encoding="utf-8") as f:
-        json.dump(tarefas, f, indent=4, ensure_ascii=False)
-
-
-# ============================================================
-# LOGIN NO PABX
-# ============================================================
-def login():
-    """
-    Autentica no PABX usando EMAIL e SENHA do st.secrets.
-    Retorna:
-        (sessao, None) se o login aparentar sucesso.
-        (None, mensagem) em caso de erro.
-    """
-    session = requests.Session()
-
-    try:
-        # Credenciais configuradas no Streamlit.
-        email = st.secrets["EMAIL"]
-        senha = st.secrets["SENHA"]
-
-        # Identifica o cliente HTTP.
-        session.headers.update({
-            "User-Agent": (
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/120.0.0.0 Safari/537.36"
+# ==========================================================
+# SIDEBAR
+# ==========================================================
+with st.sidebar:
+    # ------------------------------------------------------
+    # CABEÇALHO DA SIDEBAR
+    # ------------------------------------------------------
+    col_titulo, col_toggle = st.columns([5, 1])
+    with col_titulo:
+        if st.session_state.sidebar_expandida:
+            st.markdown(
+                '<p class="sgih-title">⚡SGIH</p>',
+                unsafe_allow_html=True
             )
-        })
-
-        # Abre a página de login para obter o CSRF.
-        resposta = session.get(
-            LOGIN_URL,
-            timeout=REQUEST_TIMEOUT,
-        )
-        resposta.raise_for_status()
-
-        soup = BeautifulSoup(resposta.text, "html.parser")
-        campo_token = soup.find(
-            "input",
-            {"name": "_token"},
-        )
-
-        if campo_token is None or not campo_token.get("value"):
-            session.close()
-            return None, (
-                "O PABX não retornou o token CSRF. "
-                "Verifique a página de login."
+            st.markdown(
+                '<p class="sgih-subtitle">'
+                'Sistema de Gestão Inteligente de ServiceDesk'
+                '</p>',
+                unsafe_allow_html=True
             )
 
-        token = campo_token["value"]
+    # ------------------------------------------------------
+    # BOTÃO PARA EXPANDIR/RECOLHER SIDEBAR
+    # ------------------------------------------------------
+    with col_toggle:
+        if st.button(
+            "☰",
+            key="btn_toggle_sidebar"
+        ):
+            st.session_state.sidebar_expandida = (
+                not st.session_state.sidebar_expandida
+            )
+            st.rerun()
 
-        # Dados enviados ao formulário de autenticação.
-        payload = {
-            "login": email,
-            "senha": senha,
-            "_token": token,
-        }
+    st.divider()
 
-        resposta_login = session.post(
-            LOGIN_URL,
-            data=payload,
-            timeout=REQUEST_TIMEOUT,
-            allow_redirects=True,
-        )
-        resposta_login.raise_for_status()
-
-        # Verificação básica para detectar se continuamos
-        # na página de login depois do envio do formulário.
-        url_final = resposta_login.url.rstrip("/")
-        pagina_final = BeautifulSoup(
-            resposta_login.text,
-            "html.parser",
-        )
-        campo_login = pagina_final.find(
-            "input",
-            {"name": "_token"},
-        )
-
-        ainda_no_login = (
-            url_final == LOGIN_URL.rstrip("/")
-            and campo_login is not None
-        )
-
-        if ainda_no_login:
-            session.close()
-            return None, (
-                "Falha de autenticação no PABX. "
-                "Confira as credenciais."
+    # ======================================================
+    # CONFIGURAÇÕES
+    # ======================================================
+    if st.session_state.sidebar_expandida:
+        with st.expander(
+            "⚙️ Configurações",
+            expanded=False
+        ):
+            st.session_state.refresh_rate = st.slider(
+                "Atualização (segundos)",
+                10,
+                300,
+                st.session_state.refresh_rate,
+                5
             )
 
-        return session, None
-
-    except KeyError:
-        session.close()
-        return None, (
-            "Configure EMAIL e SENHA em "
-            ".streamlit/secrets.toml."
+            # Botão de som do Kanban (dentro do expansor)
+            st.markdown("---")
+            renderizar_botao_audio()
+    else:
+        st.button(
+            "⚙️",
+            key="btn_config_icon",
+            help="Configurações de atualização"
         )
-    except requests.Timeout:
-        session.close()
-        return None, "Tempo limite excedido no login do PABX."
-    except requests.RequestException:
-        session.close()
-        return None, "Falha de conexão durante o login no PABX."
-    except Exception:
-        session.close()
-        return None, "Erro inesperado durante o login no PABX."
 
-
-# ============================================================
-# CONSULTA DOS AGENTES
-# ============================================================
-def get_agentes(session):
-    """
-    Consulta a página de monitoramento dos técnicos.
-    A lógica fornecida utiliza:
-        Coluna 0: nome do técnico.
-        Coluna 2: status do técnico.
-
-    Retorna uma lista de tuplas:
-        [("Leonardo", "livre"), ("Matheus", "pausa")]
-    """
-    resposta = session.get(
-        MONITOR_URL,
-        timeout=REQUEST_TIMEOUT,
+    # ======================================================
+    # BADGE DE JOBS
+    # ======================================================
+    job_analise = st.session_state.jobs.get(
+        "analise_chamadas"
     )
-    resposta.raise_for_status()
-
-    soup = BeautifulSoup(resposta.text, "html.parser")
-    tabela = soup.find("table")
-
-    if tabela is None:
-        raise ValueError(
-            "Tabela de agentes não encontrada. "
-            "Verifique a sessão ou o HTML do PABX."
+    if (
+        job_analise
+        and job_analise["status"] == "running"
+    ):
+        pct = int(
+            job_analise["progresso"] * 100
         )
-
-    agentes = []
-
-    for linha in tabela.find_all("tr"):
-        colunas = linha.find_all("td")
-
-        # Ignora cabeçalhos e linhas incompletas.
-        if len(colunas) < 3:
-            continue
-
-        # Extrai o nome.
-        nome = colunas[0].get_text(" ", strip=True)
-
-        # Remove o texto auxiliar que pode aparecer no nome.
-        nome = re.split(
-            r"Última chamada",
-            nome,
-            flags=re.IGNORECASE,
-        )[0].strip()
-
-        # Extrai o texto da terceira coluna.
-        texto_status = colunas[2].get_text(
-            " ",
-            strip=True,
-        )
-
-        if not nome:
-            continue
-
-        status = normalizar_status(texto_status)
-        agentes.append((nome, status))
-
-    return agentes
-
-
-# ============================================================
-# CONSULTA PABX COM CACHE
-# ============================================================
-@st.cache_data(ttl=CACHE_TTL, show_spinner=False)
-def _status_pabx_cache(ttl_marker):
-    """
-    Armazena temporariamente os dados do PABX.
-    ttl_marker integra a chave do cache, permitindo renovar
-    a consulta quando o intervalo de atualização muda.
-    """
-    _ = ttl_marker
-
-    session, erro = login()
-    if session is None:
-        return {
-            "ok": False,
-            "agentes": [],
-            "erro": erro,
-        }
-
-    try:
-        agentes = get_agentes(session)
-        return {
-            "ok": True,
-            "agentes": agentes,
-            "erro": None,
-        }
-    except requests.Timeout:
-        return {
-            "ok": False,
-            "agentes": [],
-            "erro": "Tempo limite excedido na consulta do PABX.",
-        }
-    except requests.RequestException:
-        return {
-            "ok": False,
-            "agentes": [],
-            "erro": "Falha de conexão ao consultar os técnicos.",
-        }
-    except ValueError as erro:
-        return {
-            "ok": False,
-            "agentes": [],
-            "erro": str(erro),
-        }
-    except Exception:
-        return {
-            "ok": False,
-            "agentes": [],
-            "erro": "Erro inesperado ao consultar os técnicos.",
-        }
-    finally:
-        session.close()
-
-
-# ============================================================
-# KANBAN — LOGIN E ATUALIZAÇÃO
-# ============================================================
-def login_kanban():
-    session = requests.Session()
-    try:
-        r = session.get(
-            "https://kanban.interativanet.com.br/?controller=AuthController&action=login",
-            timeout=REQUEST_TIMEOUT,
-        )
-        soup = BeautifulSoup(r.text, "html.parser")
-        csrf_token = soup.find("input", {"name": "csrf_token"})
-
-        payload = {
-            "username": st.secrets["KANBAN_USER"],
-            "password": st.secrets["KANBAN_PASS"],
-        }
-        if csrf_token:
-            payload["csrf_token"] = csrf_token["value"]
-
-        session.post(KANBAN_LOGIN_URL, data=payload, timeout=REQUEST_TIMEOUT)
-        return session
-    except Exception:
-        return None
-
-
-def atualizar_kanban(session_kb):
-    """
-    Sincroniza com o Kanban sem duplicar tarefas.
-    Dispara som quando detecta nova tarefa criada.
-    """
-    if not session_kb:
-        return
-
-    try:
-        r = session_kb.get(KANBAN_URL, timeout=REQUEST_TIMEOUT)
-        soup = BeautifulSoup(r.text, "html.parser")
-
-        atividades = soup.find_all("div", class_="activity-content")
-        tarefas_atuais = st.session_state.tarefas_kanban.copy()
-        houve_alteracao = False
-        disparar_som = False
-
-        for atividade in reversed(atividades):
-            title_p = atividade.find("p", class_="activity-title")
-            if not title_p:
-                continue
-
-            texto_acao = title_p.get_text(" ", strip=True)
-            link_task = title_p.find("a")
-            date_span = title_p.find("small", class_="activity-date")
-
-            if not link_task or not date_span:
-                continue
-
-            task_id = link_task.get_text(strip=True)
-            data_atividade = date_span.get_text(strip=True)
-
-            desc_div = atividade.find("div", class_="activity-description")
-            titulo_tarefa = (
-                desc_div.find("p", class_="activity-task-title").get_text(strip=True)
-                if desc_div
-                else "Sem título"
+        if st.session_state.sidebar_expandida:
+            st.markdown(
+                f'''
+                <div class="badge-job">
+                    🔄 Análise de chamadas: {pct}%<br>
+                    {job_analise["texto"]}
+                </div>
+                ''',
+                unsafe_allow_html=True
+            )
+        else:
+            st.markdown(
+                f'''
+                <div class="badge-job">
+                    🔄 {pct}%
+                </div>
+                ''',
+                unsafe_allow_html=True
+            )
+    elif (
+        job_analise
+        and job_analise["status"] == "done"
+    ):
+        if st.session_state.sidebar_expandida:
+            st.markdown(
+                '''
+                <div class="badge-job">
+                    ✅ Análise de chamadas pronta
+                </div>
+                ''',
+                unsafe_allow_html=True
             )
 
-            if "criou a tarefa" in texto_acao:
-                if task_id not in tarefas_atuais:
-                    tarefas_atuais[task_id] = {
-                        "titulo": titulo_tarefa,
-                        "data_criacao": data_atividade,
-                        "status": "Pendente",
-                    }
-                    houve_alteracao = True
-                    disparar_som = True
+    # ======================================================
+    # MENU LATERAL
+    # ======================================================
+    st.divider()
 
-            elif "finalizou a tarefa" in texto_acao:
-                if task_id in tarefas_atuais:
-                    del tarefas_atuais[task_id]
-                    houve_alteracao = True
+    # ------------------------------------------------------
+    # NOMES DOS BOTÕES
+    # ------------------------------------------------------
+    label_visao = (
+        "🏠 Visão Geral"
+        if st.session_state.sidebar_expandida
+        else "🏠"
+    )
+    label_chamadas = (
+        "📞 Chamadas"
+        if st.session_state.sidebar_expandida
+        else "📞"
+    )
+    label_relatorios = (
+        "📈 Relatórios"
+        if st.session_state.sidebar_expandida
+        else "📈"
+    )
+    label_links = (
+        "📑 Links úteis"
+        if st.session_state.sidebar_expandida
+        else "📑"
+    )
 
-        if houve_alteracao:
-            st.session_state.tarefas_kanban = tarefas_atuais
-            salvar_tarefas(tarefas_atuais)
-            if disparar_som:
-                st.session_state.play_alert = True
+    # ======================================================
+    # BOTÃO VISÃO GERAL
+    # ======================================================
+    if st.button(
+        label_visao,
+        use_container_width=True,
+        key="menu_visao"
+    ):
+        ir_para("visao_geral")
 
-    except Exception as e:
-        st.sidebar.error(f"Erro ao ler Kanban: {e}")
+    # ======================================================
+    # BOTÃO CHAMADAS
+    # ======================================================
+    if st.button(
+        label_chamadas,
+        use_container_width=True,
+        key="menu_chamadas"
+    ):
+        ir_para("chamadas")
 
+    # ======================================================
+    # BOTÃO RELATÓRIOS
+    # ======================================================
+    if st.button(
+        label_relatorios,
+        use_container_width=True,
+        key="menu_relatorios"
+    ):
+        ir_para("relatorios")
 
-# ============================================================
-# FUNÇÕES DE AÇÃO NAS TAREFAS (NOVAS)
-# ============================================================
-def finalizar_tarefa(task_id: str):
-    """
-    Remove a tarefa da lista de pendentes e salva no arquivo.
-    Equivale a "encerrar" a tarefa manualmente.
-    """
-    if task_id in st.session_state.tarefas_kanban:
-        del st.session_state.tarefas_kanban[task_id]
-        salvar_tarefas(st.session_state.tarefas_kanban)
-        # Limpa estado de edição caso estivesse editando esta tarefa
-        if st.session_state.get("editando_tarefa") == task_id:
-            st.session_state.editando_tarefa = None
-        st.rerun()
+    # ======================================================
+    # BOTÃO LINKS ÚTEIS
+    # ======================================================
+    if st.button(
+        label_links,
+        use_container_width=True,
+        key="menu_links"
+    ):
+        ir_para("links")
 
+# ==========================================================
+# ROTEADOR PRINCIPAL
+# ==========================================================
 
-def salvar_edicao_tarefa(task_id: str, novo_titulo: str):
-    """
-    Salva o novo nome da tarefa e sai do modo de edição.
-    """
-    novo_titulo = (novo_titulo or "").strip()
-    if not novo_titulo:
-        st.warning("O título da tarefa não pode ficar vazio.")
-        return
+# ==========================================================
+# VISÃO GERAL
+# ==========================================================
+if st.session_state.menu == "visao_geral":
+    from modules import visao_geral
+    visao_geral.render(
+        st.session_state.refresh_rate
+    )
 
-    if task_id in st.session_state.tarefas_kanban:
-        st.session_state.tarefas_kanban[task_id]["titulo"] = novo_titulo
-        salvar_tarefas(st.session_state.tarefas_kanban)
-        st.session_state.editando_tarefa = None
-        st.rerun()
-
-
-# ============================================================
-# WHATSFLUX — STATUS ONLINE
-# ============================================================
-def login_e_get_status_whatsflux():
-    login_api_url = "https://api.whatsflux.com.br/auth/login"
-    users_api_url = "https://api.whatsflux.com.br/users"
-
-    session = requests.Session()
-    headers = {
-        "User-Agent": (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/120.0.0.0 Safari/537.36"
-        ),
-        "Accept": "application/json, text/plain, */*",
-        "Content-Type": "application/json;charset=UTF-8",
-        "Referer": "https://app.whatsflux.com.br/login",
-        "Origin": "https://app.whatsflux.com.br",
-    }
-    session.headers.update(headers)
-
-    tecnicos_alvo = ["Leonardo", "Matheus", "Gabriel", "Ramon", "Thiago", "Vinicius"]
-    status_tecnicos = {nome: "offline" for nome in tecnicos_alvo}
-
-    try:
-        email_whats = st.secrets["WHATSFLUX_EMAIL"]
-        senha_whats = st.secrets["WHATSFLUX_SENHA"]
-    except KeyError:
-        return "Configure o Secrets (WHATSFLUX_EMAIL / WHATSFLUX_SENHA)", {}
-
-    try:
-        payload = {"email": email_whats, "password": senha_whats}
-        res_login = session.post(login_api_url, json=payload, timeout=10)
-
-        if res_login.status_code not in [200, 201, 302]:
-            return f"Falha Auth (HTTP {res_login.status_code})", {}
-
-        dados_resposta = res_login.json()
-        token = dados_resposta.get("token") or dados_resposta.get("access_token")
-
-        if token:
-            session.headers.update({"Authorization": f"Bearer {token}"})
-
-        res_users = session.get(users_api_url, timeout=10)
-        if res_users.status_code != 200:
-            return f"Erro API Users ({res_users.status_code})", {}
-
-        resposta_json = res_users.json()
-        dados_usuarios = resposta_json.get("users", [])
-
-        def normalizar(texto):
-            if not texto:
-                return ""
-            return (
-                unicodedata.normalize("NFKD", texto)
-                .encode("ASCII", "ignore")
-                .decode("ASCII")
-                .lower()
-                .strip()
-            )
-
-        for usuario in dados_usuarios:
-            nome_usuario = usuario.get("name", "")
-            is_online = usuario.get("online", False)
-            nome_usuario_limpo = normalizar(nome_usuario)
-
-            for tecnico in tecnicos_alvo:
-                tecnico_limpo = normalizar(tecnico)
-                if tecnico_limpo in nome_usuario_limpo and is_online:
-                    status_tecnicos[tecnico] = "online"
-
-        return "OK", status_tecnicos
-
-    except Exception as e:
-        return f"Erro de Conexão ({str(e)[:30]})", {}
-
-
-# ============================================================
-# INTERFACE DA VISÃO GERAL
-# ============================================================
-def render(refresh_rate=30):
-    """
-    Renderiza o painel de monitoramento.
-    """
-    refresh_rate = max(5, min(300, int(refresh_rate)))
-
-    # Inicialização de estados
-    if "tarefas_kanban" not in st.session_state:
-        st.session_state.tarefas_kanban = carregar_tarefas_salvas()
-
-    if "play_alert" not in st.session_state:
-        st.session_state.play_alert = False
-
-    if "session_kanban" not in st.session_state:
-        st.session_state.session_kanban = None
-
-    # Novo estado: qual tarefa está sendo editada no momento
-    if "editando_tarefa" not in st.session_state:
-        st.session_state.editando_tarefa = None
-
-    @st.fragment(run_every=refresh_rate)
-    def painel_monitoramento():
-        # Cabeçalho original do SGIH.
-        st.title("Visão Geral")
+# ==========================================================
+# CHAMADAS
+# ==========================================================
+elif st.session_state.menu == "chamadas":
+    if st.session_state.card is None:
+        st.title("📞 Chamadas")
         st.caption(
-            "Monitoramento do ambiente e ferramentas - Service Desk"
+            "Selecione um módulo para carregar"
         )
+        c1, c2, c3 = st.columns(3)
 
-        # Muda a chave de consulta a cada intervalo.
-        ttl_marker = int(time.time() // refresh_rate)
-        resultado_pabx = _status_pabx_cache(ttl_marker)
+        with c1:
+            st.markdown("#### 🚫 Chamada Recusada")
+            if st.button(
+                "Abrir",
+                key="card_recusada",
+                use_container_width=True
+            ):
+                st.session_state.card = "recusada"
+                st.rerun()
 
-        # ---------- KANBAN (real) ----------
-        if st.session_state.session_kanban is None:
-            st.session_state.session_kanban = login_kanban()
+        with c2:
+            st.markdown("#### 📊 Análise de Chamadas")
+            job = st.session_state.jobs.get("analise_chamadas")
+            if job and job["status"] == "running":
+                st.caption(
+                    f"🔄 Rodando em segundo plano "
+                    f"({int(job['progresso'] * 100)}%)"
+                )
+            elif job and job["status"] == "done":
+                st.caption("✅ Resultado pronto")
+            if st.button(
+                "Abrir",
+                key="card_analise",
+                use_container_width=True
+            ):
+                st.session_state.card = "analise"
+                st.rerun()
 
-        atualizar_kanban(st.session_state.session_kanban)
-        tarefas_kanban = st.session_state.tarefas_kanban
+        with c3:
+            st.markdown("#### ☎️ Ligação por Ramal")
+            if st.button(
+                "Abrir",
+                key="card_ramal",
+                use_container_width=True
+            ):
+                st.session_state.card = "ramal"
+                st.rerun()
 
-        # ---------- WHATSFLUX (real) ----------
-        status_whats, whatsapp = login_e_get_status_whatsflux()
+    else:
+        if st.button("← Voltar para os cards"):
+            st.session_state.card = None
+            st.rerun()
 
-        # Layout de três colunas.
-        col1, col2, col3 = st.columns(
-            [1.3, 1.7, 1],
-            gap="medium",
-        )
+        if st.session_state.card == "analise":
+            from modules import analise_chamadas_async
+            analise_chamadas_async.render()
+        elif st.session_state.card == "recusada":
+            from modules import chamada_recusada
+            chamada_recusada.render()
+        elif st.session_state.card == "ramal":
+            from modules import ligacao_ramal
+            ligacao_ramal.render()
 
-        # ----------------------------------------------------
-        # COLUNA 1 — PABX
-        # ----------------------------------------------------
-        with col1:
-            st.subheader("☎️ Status PABX")
+# ==========================================================
+# MENU RELATÓRIOS
+# ==========================================================
+elif st.session_state.menu == "relatorios":
+    st.title("📈 Relatórios")
+    st.caption(
+        "Área de relatórios do sistema - Selecione um relatório para visualizar"
+    )
+    from modules import relatorios
+    relatorios.render()
 
-            if not resultado_pabx["ok"]:
-                st.error(resultado_pabx["erro"])
-            else:
-                agentes = resultado_pabx["agentes"]
-
-                if not agentes:
-                    st.warning(
-                        "Nenhum técnico encontrado na tabela "
-                        "retornada pelo PABX."
-                    )
-                else:
-                    livres = sum(status == "livre" for _, status in agentes)
-                    ocupados = sum(status == "ocupado" for _, status in agentes)
-                    pausas = sum(status == "pausa" for _, status in agentes)
-                    offline = sum(status == "offline" for _, status in agentes)
-
-                    st.markdown(
-                        f"""
-                        <div style="
-                            white-space: nowrap;
-                            width: 50px;
-                            max-width: 50px;
-                            font-size: 12px;
-                            padding: 6px 0;
-                            line-height: 1.5;
-                            margin-bottom: 10px;
-                        ">
-                            🟢 {livres} livres
-                            &nbsp;|&nbsp;
-                            🔴 {ocupados} ocupados
-                            &nbsp;|&nbsp;
-                            🟡 {pausas} em pausa
-                            &nbsp;|&nbsp;
-                            ⚪ {offline} offline
-                        </div>
-                        """,
-                        unsafe_allow_html=True,
-                    )
-
-                    for nome, status in agentes:
-                        if status == "offline":
-                            continue
-
-                        cor = {
-                            "livre": "🟢",
-                            "ocupado": "🔴",
-                            "pausa": "🟡",
-                            "offline": "⚪",
-                        }.get(status, "⚪")
-
-                        st.write(f"{cor} {nome} — {status}")
-
-        # ----------------------------------------------------
-        # COLUNA 2 — KANBAN (com botões Finalizar e Editar)
-        # ----------------------------------------------------
-        with col2:
-            st.subheader("🗂️ Tarefas Kanban")
-
-            if not tarefas_kanban:
-                st.info("Nenhuma tarefa pendente.")
-            else:
-                for task_id, tarefa in list(tarefas_kanban.items()):
-                    # --- MODO DE EDIÇÃO ---
-                    if st.session_state.editando_tarefa == task_id:
-                        # Campo de texto para editar o título
-                        novo_titulo = st.text_input(
-                            "Editar título da tarefa",
-                            value=tarefa.get("titulo", ""),
-                            key=f"edit_input_{task_id}",
-                            label_visibility="collapsed",
-                        )
-
-                        # Botões de Salvar e Cancelar lado a lado
-                        col_salvar, col_cancelar = st.columns(2)
-                        with col_salvar:
-                            if st.button(
-                                "💾 Salvar",
-                                key=f"btn_salvar_{task_id}",
-                                use_container_width=True,
-                                type="primary",
-                            ):
-                                salvar_edicao_tarefa(task_id, novo_titulo)
-
-                        with col_cancelar:
-                            if st.button(
-                                "❌ Cancelar",
-                                key=f"btn_cancelar_{task_id}",
-                                use_container_width=True,
-                            ):
-                                st.session_state.editando_tarefa = None
-                                st.rerun()
-
-                    # --- MODO NORMAL (visualização) ---
-                    else:
-                        # Layout: título + botões à direita
-                        col_titulo, col_botoes = st.columns([4, 2])
-
-                        with col_titulo:
-                            st.markdown(
-                                f"**• {tarefa['titulo']}**  \n"
-                                f"<small style='color:gray'>"
-                                f"{tarefa.get('status', 'Pendente')} • "
-                                f"{tarefa.get('data_criacao', '')}"
-                                f"</small>",
-                                unsafe_allow_html=True,
-                            )
-
-                        with col_botoes:
-                            # Botão Editar
-                            if st.button(
-                                "✏️ Editar",
-                                key=f"btn_editar_{task_id}",
-                                use_container_width=True,
-                            ):
-                                st.session_state.editando_tarefa = task_id
-                                st.rerun()
-
-                            # Botão Finalizar (vermelho)
-                            if st.button(
-                                "✅ Finalizar",
-                                key=f"btn_finalizar_{task_id}",
-                                use_container_width=True,
-                                type="primary",
-                            ):
-                                finalizar_tarefa(task_id)
-
-                        # Linha separadora sutil entre tarefas
-                        st.markdown(
-                            "<hr style='margin: 6px 0; border: none; border-top: 1px solid #eee;'>",
-                            unsafe_allow_html=True,
-                        )
-
-        # ----------------------------------------------------
-        # COLUNA 3 — WHATSAPP (WhatsFlux)
-        # ----------------------------------------------------
-        with col3:
-            st.subheader("💬 WhatsApp")
-
-            if status_whats != "OK":
-                st.warning(status_whats)
-            else:
-                for nome, status in whatsapp.items():
-                    cor = "🟢" if status == "online" else "⚪"
-                    st.write(f"{cor} {nome} — {status}")
-
-    # Executa o painel com atualização automática.
-    painel_monitoramento()
+# ==========================================================
+# MENU LINKS ÚTEIS
+# ==========================================================
+elif st.session_state.menu == "links":
+    st.title("📑 Links úteis")
+    st.caption(
+        "Links e recursos úteis do ServiceDesk"
+    )
+    from modules import links
+    links.render()
