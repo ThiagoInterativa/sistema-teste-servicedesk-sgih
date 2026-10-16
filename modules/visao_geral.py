@@ -737,7 +737,7 @@ def render(refresh_rate=30):
                                     key=f"btn_finalizar_{task_id}",
                                     help="Finalizar tarefa",
                                     use_container_width=True,
-                                    type="primary",
+                                    
                                 ):
                                     finalizar_tarefa(task_id)
 
