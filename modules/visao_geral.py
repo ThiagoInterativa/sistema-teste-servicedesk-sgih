@@ -738,57 +738,62 @@ def render(refresh_rate=30):
                                 st.rerun()
 
                     # --- MODO NORMAL (visualização) ---
+                    
                     else:
-                        # Layout: título + botões à direita
-                        col_titulo, col_botoes = st.columns([4, 2])
+    # Layout mais compacto: título ocupa quase tudo, botões ficam bem pequenos à direita
+                        col_titulo, col_botoes = st.columns([5.5, 1.5], gap="small")
 
                         with col_titulo:
-                            st.markdown(
-                                f"**• {tarefa['titulo']}**  \n"
-                                f"<small style='color:gray'>"
-                                f"{tarefa.get('status', 'Pendente')} • "
-                                f"{tarefa.get('data_criacao', '')}"
-                                f"</small>",
-                                unsafe_allow_html=True,
-                            )
+                                st.markdown(
+                                    f"**• {tarefa['titulo']}**  \n"
+                                    f"<small style='color:gray'>"
+                                    f"{tarefa.get('status', 'Pendente')} • "
+                                    f"{tarefa.get('data_criacao', '')}"
+                                    f"</small>",
+                                    unsafe_allow_html=True,
+                                )
 
                         with col_botoes:
-                            # Botão Editar
-                            if st.button(
-                                "✏️ Editar",
-                                key=f"btn_editar_{task_id}",
-                                use_container_width=True,
-                            ):
-                                st.session_state.editando_tarefa = task_id
-                                st.rerun()
-
-                            # Botão Finalizar (vermelho)
-                            if st.button(
-                                "✅ Finalizar",
-                                key=f"btn_finalizar_{task_id}",
-                                use_container_width=True,
-                                type="primary",
-                            ):
-                                finalizar_tarefa(task_id)
-
-                        # Linha separadora sutil entre tarefas
+                            # Dois botões lado a lado (não um embaixo do outro)
+                            b1, b2 = st.columns(2, gap="small")
+                    
+                            with b1:
+                                if st.button(
+                                    "✏️",
+                                    key=f"btn_editar_{task_id}",
+                                    help="Editar título",
+                                    use_container_width=True,
+                                ):
+                                    st.session_state.editando_tarefa = task_id
+                                    st.rerun()
+                    
+                            with b2:
+                                if st.button(
+                                    "✅",
+                                    key=f"btn_finalizar_{task_id}",
+                                    help="Finalizar tarefa",
+                                    use_container_width=True,
+                                    type="primary",
+                                ):
+                                    finalizar_tarefa(task_id)
+                    
+                        # Linha separadora bem fina
                         st.markdown(
-                            "<hr style='margin: 6px 0; border: none; border-top: 1px solid #eee;'>",
+                            "<hr style='margin: 4px 0; border: none; border-top: 1px solid #eee;'>",
                             unsafe_allow_html=True,
                         )
-
-        # ----------------------------------------------------
-        # COLUNA 3 — WHATSAPP (WhatsFlux)
-        # ----------------------------------------------------
-        with col3:
-            st.subheader("💬 WhatsApp")
-
-            if status_whats != "OK":
-                st.warning(status_whats)
-            else:
-                for nome, status in whatsapp.items():
-                    cor = "🟢" if status == "online" else "⚪"
-                    st.write(f"{cor} {nome} — {status}")
+                            # ----------------------------------------------------
+                            # COLUNA 3 — WHATSAPP (WhatsFlux)
+                            # ----------------------------------------------------
+                            with col3:
+                                st.subheader("💬 WhatsApp")
+                    
+                                if status_whats != "OK":
+                                    st.warning(status_whats)
+                                else:
+                                    for nome, status in whatsapp.items():
+                                        cor = "🟢" if status == "online" else "⚪"
+                                        st.write(f"{cor} {nome} — {status}")
 
     # Executa o painel com atualização automática.
     painel_monitoramento()
